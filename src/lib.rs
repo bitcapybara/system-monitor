@@ -6,6 +6,7 @@ use sysinfo::{CpuExt, DiskExt, NetworkExt, SystemExt};
 
 #[derive(Debug, Default)]
 pub struct Cpu {
+    pub name: String,
     pub usage: f32,
 }
 
@@ -119,6 +120,7 @@ impl SystemMonitor {
                                     .cpus()
                                     .iter()
                                     .map(|c| Cpu {
+                                        name: c.name().to_string(),
                                         usage: c.cpu_usage(),
                                     })
                                     .collect(),
