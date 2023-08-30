@@ -58,143 +58,161 @@ pub enum Request {
     Disk { tx: oneshot::Sender<Vec<Disk>> },
 }
 
-pub struct SystemMonitor {
-    req_tx: flume::Sender<Request>,
+pub struct SystemMonitorBuilder {
+    system: Arc<RwLock<sysinfo::System>>,
 }
 
-impl SystemMonitor {
+impl SystemMonitorBuilder {
     pub fn new() -> Self {
-        let system = Arc::new(RwLock::new(sysinfo::System::new()));
-        {
-            let cpu_system = system.clone();
-            thread::spawn(move || loop {
-                {
-                    let mut system = cpu_system.write();
-                    system.refresh_cpu();
-                }
-                thread::sleep(sysinfo::System::MINIMUM_CPU_UPDATE_INTERVAL);
-            });
+        Self {
+            system: Arc::new(RwLock::new(sysinfo::System::new())),
         }
-        {
-            let mem_system = system.clone();
-            thread::spawn(move || loop {
-                {
-                    let mut system = mem_system.write();
-                    system.refresh_memory();
-                }
-                thread::sleep(Duration::from_secs(10));
-            });
-        }
-        {
-            let disk_system = system.clone();
-            thread::spawn(move || loop {
-                {
-                    let mut system = disk_system.write();
-                    system.refresh_disks_list();
-                    system.refresh_disks();
-                }
-                thread::sleep(Duration::from_secs(30));
-            });
-        }
-        {
-            let net_system = system.clone();
-            thread::spawn(move || loop {
-                {
-                    let mut system = net_system.write();
-                    system.refresh_networks_list();
-                    system.refresh_networks();
-                }
-                thread::sleep(Duration::from_millis(500));
-            });
-        }
+    }
+
+    pub fn cpu(self, duration: Duration) -> Self {
+        let duration = if duration < sysinfo::System::MINIMUM_CPU_UPDATE_INTERVAL {
+            sysinfo::System::MINIMUM_CPU_UPDATE_INTERVAL
+        } else {
+            duration
+        };
+        let cpu_system = self.system.clone();
+        thread::spawn(move || loop {
+            {
+                let mut system = cpu_system.write();
+                system.refresh_cpu();
+            }
+            thread::sleep(duration);
+        });
+        self
+    }
+
+    pub fn memory(self, duration: Duration) -> Self {
+        let mem_system = self.system.clone();
+        thread::spawn(move || loop {
+            {
+                let mut system = mem_system.write();
+                system.refresh_memory();
+            }
+            thread::sleep(duration);
+        });
+        self
+    }
+
+    pub fn network(self, duration: Duration) -> Self {
+        let net_system = self.system.clone();
+        thread::spawn(move || loop {
+            {
+                let mut system = net_system.write();
+                system.refresh_networks_list();
+                system.refresh_networks();
+            }
+            thread::sleep(duration);
+        });
+        self
+    }
+
+    pub fn disk(self, duration: Duration) -> Self {
+        let disk_system = self.system.clone();
+        thread::spawn(move || loop {
+            {
+                let mut system = disk_system.write();
+                system.refresh_disks_list();
+                system.refresh_disks();
+            }
+            thread::sleep(duration);
+        });
+        self
+    }
+
+    pub fn build(self) -> SystemMonitor {
         let (req_tx, req_rx) = flume::bounded(1);
-        {
-            let async_system = system.clone();
-            thread::spawn(move || {
-                while let Ok(req) = req_rx.recv() {
-                    let system = async_system.read();
-                    match req {
-                        Request::Cpu { tx } => {
-                            tx.send(
-                                system
-                                    .cpus()
-                                    .iter()
-                                    .map(|c| Cpu {
-                                        name: c.name().to_string(),
-                                        usage: c.cpu_usage(),
-                                    })
-                                    .collect(),
-                            )
-                            .ok();
-                        }
-                        Request::Memory { tx } => {
-                            tx.send(Memory {
-                                total: system.total_memory(),
-                                available: system.available_memory(),
-                                free: system.free_memory(),
-                                used: system.used_memory(),
-                                swap: Swap {
-                                    total: system.total_swap(),
-                                    free: system.free_swap(),
-                                    used: system.used_swap(),
-                                },
-                            })
-                            .ok();
-                        }
-                        Request::Network { tx } => {
-                            tx.send(
-                                system
-                                    .networks()
-                                    .into_iter()
-                                    .map(|n| Network {
-                                        name: n.0.to_string(),
-                                        received: n.1.received(),
-                                        total_received: n.1.total_received(),
-                                        transmitted: n.1.transmitted(),
-                                        total_transmitted: n.1.total_transmitted(),
-                                        packets_received: n.1.packets_received(),
-                                        total_packets_received: n.1.total_packets_received(),
-                                        packets_transmitted: n.1.packets_transmitted(),
-                                        total_packets_transmitted: n.1.total_packets_transmitted(),
-                                        errors_on_received: n.1.errors_on_received(),
-                                        total_errors_on_received: n.1.total_errors_on_received(),
-                                        errors_on_transmitted: n.1.errors_on_transmitted(),
-                                        total_errors_on_transmitted: n
-                                            .1
-                                            .total_errors_on_transmitted(),
-                                    })
-                                    .collect(),
-                            )
-                            .ok();
-                        }
-                        Request::Disk { tx } => {
-                            tx.send(
-                                system
-                                    .disks()
-                                    .iter()
-                                    .map(|d| Disk {
-                                        file_system: String::from_utf8_lossy(d.file_system())
-                                            .to_string(),
-                                        mount_point: d.mount_point().to_path_buf(),
-                                        total_space: d.total_space(),
-                                        available_space: d.available_space(),
-                                    })
-                                    .collect(),
-                            )
-                            .ok();
-                        }
+        let async_system = self.system.clone();
+        thread::spawn(move || {
+            while let Ok(req) = req_rx.recv() {
+                let system = async_system.read();
+                match req {
+                    Request::Cpu { tx } => {
+                        tx.send(
+                            system
+                                .cpus()
+                                .iter()
+                                .map(|c| Cpu {
+                                    name: c.name().to_string(),
+                                    usage: c.cpu_usage(),
+                                })
+                                .collect(),
+                        )
+                        .ok();
+                    }
+                    Request::Memory { tx } => {
+                        tx.send(Memory {
+                            total: system.total_memory(),
+                            available: system.available_memory(),
+                            free: system.free_memory(),
+                            used: system.used_memory(),
+                            swap: Swap {
+                                total: system.total_swap(),
+                                free: system.free_swap(),
+                                used: system.used_swap(),
+                            },
+                        })
+                        .ok();
+                    }
+                    Request::Network { tx } => {
+                        tx.send(
+                            system
+                                .networks()
+                                .into_iter()
+                                .map(|n| Network {
+                                    name: n.0.to_string(),
+                                    received: n.1.received(),
+                                    total_received: n.1.total_received(),
+                                    transmitted: n.1.transmitted(),
+                                    total_transmitted: n.1.total_transmitted(),
+                                    packets_received: n.1.packets_received(),
+                                    total_packets_received: n.1.total_packets_received(),
+                                    packets_transmitted: n.1.packets_transmitted(),
+                                    total_packets_transmitted: n.1.total_packets_transmitted(),
+                                    errors_on_received: n.1.errors_on_received(),
+                                    total_errors_on_received: n.1.total_errors_on_received(),
+                                    errors_on_transmitted: n.1.errors_on_transmitted(),
+                                    total_errors_on_transmitted: n.1.total_errors_on_transmitted(),
+                                })
+                                .collect(),
+                        )
+                        .ok();
+                    }
+                    Request::Disk { tx } => {
+                        tx.send(
+                            system
+                                .disks()
+                                .iter()
+                                .map(|d| Disk {
+                                    file_system: String::from_utf8_lossy(d.file_system())
+                                        .to_string(),
+                                    mount_point: d.mount_point().to_path_buf(),
+                                    total_space: d.total_space(),
+                                    available_space: d.available_space(),
+                                })
+                                .collect(),
+                        )
+                        .ok();
                     }
                 }
-            });
-        }
-        Self { req_tx }
+            }
+        });
+        SystemMonitor { req_tx }
     }
 }
 
-impl Default for SystemMonitor {
+impl Default for SystemMonitorBuilder {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub struct SystemMonitor {
+    req_tx: flume::Sender<Request>,
 }
 
 impl SystemMonitor {
